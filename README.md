@@ -168,6 +168,17 @@ npx -y @smithery/cli install @effytech/freshdesk_mcp --client claude
 - Freshdesk API key
 - `uvx` installed (`pip install uv` or `brew install uv`)
 
+### Running this fork
+
+This fork tracks the stable MCP Python SDK 2.x line. Run it directly from
+GitHub without publishing a separate PyPI package:
+
+```bash
+uvx --isolated --from git+https://github.com/mpasternak/freshdesk_mcp.git@main freshdesk-mcp
+```
+
+To pin the fork source revision, replace `main` with a full commit SHA.
+
 ### Configuration
 
 1. Generate your Freshdesk API key from the Freshdesk admin panel
@@ -183,6 +194,9 @@ npx -y @smithery/cli install @effytech/freshdesk_mcp --client claude
   "freshdesk-mcp": {
     "command": "uvx",
     "args": [
+        "--isolated",
+        "--from",
+        "git+https://github.com/mpasternak/freshdesk_mcp.git@main",
         "freshdesk-mcp"
     ],
     "env": {
@@ -212,7 +226,9 @@ Once configured, you can ask Claude to perform operations like:
 For testing purposes, you can start the server manually:
 
 ```bash
-uvx freshdesk-mcp --env FRESHDESK_API_KEY=<your_api_key> --env FRESHDESK_DOMAIN=<your_domain>
+FRESHDESK_API_KEY=<your_api_key> \
+FRESHDESK_DOMAIN=<your_domain> \
+uvx --isolated --from git+https://github.com/mpasternak/freshdesk_mcp.git@main freshdesk-mcp
 ```
 
 ## Troubleshooting

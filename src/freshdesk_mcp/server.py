@@ -1,5 +1,5 @@
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 import logging
 import os
 import base64
@@ -11,8 +11,8 @@ from pydantic import BaseModel, Field
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 
-# Initialize FastMCP server
-mcp = FastMCP("freshdesk-mcp")
+# Initialize the MCP server
+mcp = MCPServer("freshdesk-mcp", version="1.3.0")
 
 FRESHDESK_API_KEY = os.getenv("FRESHDESK_API_KEY")
 FRESHDESK_DOMAIN = os.getenv("FRESHDESK_DOMAIN")
