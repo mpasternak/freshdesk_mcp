@@ -195,6 +195,31 @@ npx -y @smithery/cli install @effytech/freshdesk_mcp --client claude
 - Freshdesk API key
 - `uvx` installed (`pip install uv` or `brew install uv`)
 
+### Running this fork
+
+This fork tracks the stable MCP Python SDK 2.x line and additionally carries
+three pull requests still open against upstream:
+
+- [#45](https://github.com/effytech/freshdesk_mcp/pull/45) — missing CRUD tools
+  (contacts, companies, and the `delete_*` counterparts of existing tools).
+- [#46](https://github.com/effytech/freshdesk_mcp/pull/46) — filtering, sorting
+  and pagination on `get_tickets` / `search_tickets` /
+  `get_ticket_conversation`. Note that `get_ticket_conversation` now returns
+  `{"conversations": [...], "pagination": {...}}` instead of a bare list.
+- [#47](https://github.com/effytech/freshdesk_mcp/pull/47) — bulk fetch tools:
+  `get_ticket_full`, `download_ticket_attachments`, `extract_inline_images`,
+  `decode_ticket_status`. Downloads go to `$FRESHDESK_DOWNLOAD_DIR`
+  (default `/tmp/fd`).
+
+That makes 78 tools instead of upstream's 59. Run it directly from GitHub
+without publishing a separate PyPI package:
+
+```bash
+uvx --isolated --from git+https://github.com/mpasternak/freshdesk_mcp.git@main freshdesk-mcp
+```
+
+To pin the fork source revision, replace `main` with a full commit SHA.
+
 ### Configuration
 
 1. Generate your Freshdesk API key from the Freshdesk admin panel
@@ -210,6 +235,9 @@ npx -y @smithery/cli install @effytech/freshdesk_mcp --client claude
   "freshdesk-mcp": {
     "command": "uvx",
     "args": [
+        "--isolated",
+        "--from",
+        "git+https://github.com/mpasternak/freshdesk_mcp.git@main",
         "freshdesk-mcp"
     ],
     "env": {
@@ -239,7 +267,9 @@ Once configured, you can ask Claude to perform operations like:
 For testing purposes, you can start the server manually:
 
 ```bash
-uvx freshdesk-mcp --env FRESHDESK_API_KEY=<your_api_key> --env FRESHDESK_DOMAIN=<your_domain>
+FRESHDESK_API_KEY=<your_api_key> \
+FRESHDESK_DOMAIN=<your_domain> \
+uvx --isolated --from git+https://github.com/mpasternak/freshdesk_mcp.git@main freshdesk-mcp
 ```
 
 ## Troubleshooting
