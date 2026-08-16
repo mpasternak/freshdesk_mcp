@@ -266,7 +266,7 @@ wheels = [
 ]
 
 [[package]]
-name = "freshdesk-mcp"
+name = "freshdesk-mcp-iplweb"
 version = "1.3.0"
 source = { editable = "." }
 dependencies = [

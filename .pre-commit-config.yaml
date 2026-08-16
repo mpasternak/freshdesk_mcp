@@ -1,0 +1,25 @@
+# Deliberately light. This repository is a fork that keeps merging upstream
+# pull requests, so a repo-wide reformat would turn every future merge into a
+# conflict. The hooks below catch real defects and leaks, not style.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.4
+    hooks:
+      - id: ruff-check
+        # F = pyflakes: undefined names, unused imports, redefinitions.
+        # F811 is excluded because upstream registers create_ticket as both a
+        # tool and a prompt, which is a deliberate (if unfortunate) shadowing.
+        args: [--select, F, --ignore, F811]
+        # Both files carry pre-existing upstream violations, including a
+        # syntax error in the manual, credential-requiring test script.
+        exclude: ^tests/(test-fd-mcp\.py|test_company_functions\.py)$

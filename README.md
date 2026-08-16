@@ -1,9 +1,17 @@
-# Freshdesk MCP Server
-[![smithery badge](https://smithery.ai/badge/@effytech/freshdesk_mcp)](https://smithery.ai/server/@effytech/freshdesk_mcp)
+# Freshdesk MCP Server (iplweb fork)
 
-[![Trust Score](https://archestra.ai/mcp-catalog/api/badge/quality/effytech/freshdesk_mcp)](https://archestra.ai/mcp-catalog/effytech__freshdesk_mcp)
+[![PyPI](https://img.shields.io/pypi/v/freshdesk-mcp-iplweb.svg)](https://pypi.org/project/freshdesk-mcp-iplweb/)
+[![Python versions](https://img.shields.io/pypi/pyversions/freshdesk-mcp-iplweb.svg)](https://pypi.org/project/freshdesk-mcp-iplweb/)
+[![CI](https://github.com/mpasternak/freshdesk_mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/mpasternak/freshdesk_mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 An MCP server implementation that integrates with Freshdesk, enabling AI models to interact with Freshdesk modules and perform various support operations.
+
+> This is a fork of [effytech/freshdesk_mcp](https://github.com/effytech/freshdesk_mcp),
+> published to PyPI as **`freshdesk-mcp-iplweb`**. It runs on the MCP Python SDK 2.x
+> and carries three pull requests still open upstream — 78 tools instead of 59.
+> See [What this fork adds](#what-this-fork-adds). Upstream remains the original
+> project; all credit for the server itself goes there.
 
 ## Features
 
@@ -195,7 +203,7 @@ npx -y @smithery/cli install @effytech/freshdesk_mcp --client claude
 - Freshdesk API key
 - `uvx` installed (`pip install uv` or `brew install uv`)
 
-### Running this fork
+### What this fork adds
 
 This fork tracks the stable MCP Python SDK 2.x line and additionally carries
 three pull requests still open against upstream:
@@ -211,14 +219,26 @@ three pull requests still open against upstream:
   `decode_ticket_status`. Downloads go to `$FRESHDESK_DOWNLOAD_DIR`
   (default `/tmp/fd`).
 
-That makes 78 tools instead of upstream's 59. Run it directly from GitHub
-without publishing a separate PyPI package:
+That makes 78 tools instead of upstream's 59.
+
+### Installation
+
+From PyPI:
 
 ```bash
-uvx --isolated --from git+https://github.com/mpasternak/freshdesk_mcp.git@main freshdesk-mcp
+uvx freshdesk-mcp-iplweb
 ```
 
-To pin the fork source revision, replace `main` with a full commit SHA.
+The distribution installs two identical console scripts, `freshdesk-mcp-iplweb`
+and `freshdesk-mcp`, so an existing configuration that calls `freshdesk-mcp`
+keeps working (use `uvx --from freshdesk-mcp-iplweb freshdesk-mcp` for that
+name). Pin a release with `freshdesk-mcp-iplweb==1.3.0`.
+
+To run an unreleased revision straight from git instead:
+
+```bash
+uvx --isolated --from git+https://github.com/mpasternak/freshdesk_mcp.git@main freshdesk-mcp-iplweb
+```
 
 ### Configuration
 
@@ -235,10 +255,7 @@ To pin the fork source revision, replace `main` with a full commit SHA.
   "freshdesk-mcp": {
     "command": "uvx",
     "args": [
-        "--isolated",
-        "--from",
-        "git+https://github.com/mpasternak/freshdesk_mcp.git@main",
-        "freshdesk-mcp"
+        "freshdesk-mcp-iplweb"
     ],
     "env": {
       "FRESHDESK_API_KEY": "<YOUR_FRESHDESK_API_KEY>",
@@ -269,7 +286,7 @@ For testing purposes, you can start the server manually:
 ```bash
 FRESHDESK_API_KEY=<your_api_key> \
 FRESHDESK_DOMAIN=<your_domain> \
-uvx --isolated --from git+https://github.com/mpasternak/freshdesk_mcp.git@main freshdesk-mcp
+uvx freshdesk-mcp-iplweb
 ```
 
 ## Troubleshooting
