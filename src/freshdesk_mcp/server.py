@@ -4,9 +4,13 @@ import logging
 import os
 import base64
 import asyncio
+import ipaddress
 import mimetypes
+import socket
+import tempfile
 from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 from typing import Optional, Dict, Union, Any, List
 from enum import IntEnum, Enum
 import re
@@ -1247,7 +1251,70 @@ async def delete_ticket_summary(ticket_id: int) -> Dict[str, Any]:
         except Exception as e:
             return {"error": f"An unexpected error occurred: {str(e)}"}
 
-_DEFAULT_DL_DIR = Path(os.getenv("FRESHDESK_DOWNLOAD_DIR", "/tmp/fd"))
+def _default_download_dir() -> Path:
+    """Per-user download directory.
+
+    A fixed shared path like /tmp/fd is readable by every local account and can
+    be pre-created by someone else, so ticket attachments get their own
+    user-scoped directory instead.
+    """
+    configured = os.getenv("FRESHDESK_DOWNLOAD_DIR")
+    if configured:
+        return Path(configured)
+    uid = getattr(os, "getuid", lambda: "user")()
+    return Path(tempfile.gettempdir()) / f"freshdesk-mcp-{uid}"
+
+
+_DEFAULT_DL_DIR = _default_download_dir()
+
+# Bounds on work triggered by a single tool call. Ticket content is written by
+# whoever emailed the helpdesk, so none of it may drive unbounded local work.
+_MAX_CONVERSATION_PAGES = int(os.getenv("FRESHDESK_MAX_CONVERSATION_PAGES", "50"))
+_DOWNLOAD_CONCURRENCY = max(1, int(os.getenv("FRESHDESK_DOWNLOAD_CONCURRENCY", "5")))
+_MAX_DOWNLOAD_FILES = int(os.getenv("FRESHDESK_MAX_DOWNLOAD_FILES", "200"))
+_MAX_REDIRECTS = 5
+
+
+def _reject_non_public_url(url: str) -> Optional[str]:
+    """Return a reason to refuse fetching `url`, or None if it may be fetched.
+
+    Inline image sources come out of ticket HTML, which means a customer can
+    put any URL there and have the server request it. Without this check that
+    turns the tool into a confused deputy against anything the host can reach:
+    cloud metadata endpoints, admin panels on localhost, internal RFC 1918
+    services.
+
+    Note this validates the URL, not the socket. A hostname that resolves to a
+    public address here and a private one at connect time (DNS rebinding) would
+    still get through; defeating that needs connection-level pinning.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return f"unsupported scheme {parsed.scheme or '(none)'!r}"
+
+    host = parsed.hostname
+    if not host:
+        return "URL has no host"
+
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        return f"cannot resolve host {host!r}: {exc}"
+
+    for info in infos:
+        address = ipaddress.ip_address(info[4][0])
+        if (
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_reserved
+            or address.is_multicast
+            or address.is_unspecified
+        ):
+            return f"host {host!r} resolves to non-public address {address}"
+
+    return None
 
 
 def _auth_headers() -> Dict[str, str]:
@@ -1263,21 +1330,34 @@ async def _fd_get(client: httpx.AsyncClient, path: str, params: Optional[Dict] =
     return r
 
 
-async def _fetch_all_conversations(client: httpx.AsyncClient, ticket_id: int, per_page: int = 30) -> List[Dict[str, Any]]:
+async def _fetch_all_conversations(
+    client: httpx.AsyncClient,
+    ticket_id: int,
+    per_page: int = 30,
+    max_pages: int = _MAX_CONVERSATION_PAGES,
+) -> tuple[List[Dict[str, Any]], bool]:
+    """Fetch conversations page by page, up to `max_pages`.
+
+    Returns (conversations, truncated). Freshdesk keeps serving Link headers
+    for as long as there are pages, so an unbounded loop makes the size of a
+    single tool call a function of how much someone wrote into the ticket.
+    """
     out: List[Dict[str, Any]] = []
     page = 1
-    while True:
+    pages_read = 0
+    while pages_read < max_pages:
         r = await _fd_get(client, f"/tickets/{ticket_id}/conversations", {"page": page, "per_page": per_page})
+        pages_read += 1
         chunk = r.json()
         if not isinstance(chunk, list) or not chunk:
-            break
+            return out, False
         out.extend(chunk)
         link = r.headers.get("Link", "")
         nxt = parse_link_header(link).get("next")
         if not nxt:
-            break
+            return out, False
         page = nxt
-    return out
+    return out, True
 
 
 _STATUS_CACHE: Dict[str, Any] = {"fields": None}
@@ -1321,8 +1401,10 @@ async def get_ticket_full(
         try:
             tr = await _fd_get(client, f"/tickets/{ticket_id}", {"include": "requester,stats"})
             ticket = tr.json()
-            convs = await _fetch_all_conversations(client, ticket_id)
+            convs, truncated = await _fetch_all_conversations(client, ticket_id)
             ticket["conversations"] = convs
+            # Say so rather than letting the caller assume it read everything.
+            ticket["conversations_truncated"] = truncated
 
             if include_agent and ticket.get("responder_id"):
                 try:
@@ -1357,25 +1439,57 @@ async def get_ticket_full(
             return {"error": f"{type(e).__name__}: {e}"}
 
 
-async def _download_one(client: httpx.AsyncClient, url: str, dest: Path, size_limit: int = 50 * 1024 * 1024) -> Dict[str, Any]:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    async with client.stream("GET", url, timeout=60, follow_redirects=True) as r:
-        r.raise_for_status()
-        ctype = (r.headers.get("content-type", "application/octet-stream") or "").split(";")[0].strip()
-        if not dest.suffix:
-            ext = mimetypes.guess_extension(ctype) or ""
-            if ext:
-                dest = dest.with_suffix(ext)
-        total = 0
-        with open(dest, "wb") as f:
-            async for chunk in r.aiter_bytes(64 * 1024):
-                total += len(chunk)
-                if total > size_limit:
-                    f.close()
-                    dest.unlink(missing_ok=True)
-                    raise ValueError(f"file exceeds size_limit {size_limit}")
-                f.write(chunk)
-        return {"path": str(dest), "size": total, "content_type": ctype}
+async def _download_one(
+    client: httpx.AsyncClient,
+    url: str,
+    dest: Path,
+    size_limit: int = 50 * 1024 * 1024,
+    validate_public: bool = False,
+) -> Dict[str, Any]:
+    """Stream `url` to `dest`, refusing anything larger than `size_limit`.
+
+    With validate_public=True every hop of the redirect chain is checked
+    against _reject_non_public_url. Following redirects automatically would
+    otherwise reduce the check to theatre: a public URL is allowed to answer
+    "302 -> http://127.0.0.1/", and httpx would happily go there.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    current = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        if validate_public:
+            problem = _reject_non_public_url(current)
+            if problem:
+                raise ValueError(f"refusing to fetch {current}: {problem}")
+
+        async with client.stream(
+            "GET", current, timeout=60, follow_redirects=not validate_public
+        ) as r:
+            if validate_public and r.is_redirect:
+                location = r.headers.get("location")
+                if not location:
+                    raise ValueError(f"redirect without Location from {current}")
+                current = urljoin(current, location)
+                continue
+
+            r.raise_for_status()
+            ctype = (r.headers.get("content-type", "application/octet-stream") or "").split(";")[0].strip()
+            if not dest.suffix:
+                ext = mimetypes.guess_extension(ctype) or ""
+                if ext:
+                    dest = dest.with_suffix(ext)
+            total = 0
+            with open(dest, "wb") as f:
+                async for chunk in r.aiter_bytes(64 * 1024):
+                    total += len(chunk)
+                    if total > size_limit:
+                        f.close()
+                        dest.unlink(missing_ok=True)
+                        raise ValueError(f"file exceeds size_limit {size_limit}")
+                    f.write(chunk)
+            return {"path": str(dest), "size": total, "content_type": ctype}
+
+    raise ValueError(f"too many redirects while fetching {url}")
 
 
 def _safe_name(name: str) -> str:
@@ -1399,7 +1513,7 @@ async def download_ticket_attachments(
         try:
             tr = await _fd_get(client, f"/tickets/{ticket_id}")
             ticket = tr.json()
-            convs = await _fetch_all_conversations(client, ticket_id)
+            convs, truncated = await _fetch_all_conversations(client, ticket_id)
 
             jobs: List[tuple[Dict[str, Any], str, Path]] = []
             for a in ticket.get("attachments", []) or []:
@@ -1410,21 +1524,30 @@ async def download_ticket_attachments(
                     fname = f"t{ticket_id}_c{c['id']}_a{a['id']}_{_safe_name(a['name'])}"
                     jobs.append((a, f"conv:{c['id']}", target / fname))
 
+            skipped = max(0, len(jobs) - _MAX_DOWNLOAD_FILES)
+            jobs = jobs[:_MAX_DOWNLOAD_FILES]
+
+            # One ticket can carry hundreds of attachments; without a semaphore
+            # every one of them opens a socket at the same moment.
+            semaphore = asyncio.Semaphore(_DOWNLOAD_CONCURRENCY)
+
             async def _job(att, scope, path):
-                try:
-                    res = await _download_one(client, att["attachment_url"], path, size_limit)
-                    return {"ok": True, "scope": scope, "id": att["id"], "name": att["name"],
-                            "freshdesk_content_type": att.get("content_type"), **res}
-                except Exception as e:
-                    return {"ok": False, "scope": scope, "id": att.get("id"), "name": att.get("name"),
-                            "error": f"{type(e).__name__}: {e}"}
+                async with semaphore:
+                    try:
+                        res = await _download_one(client, att["attachment_url"], path, size_limit)
+                        return {"ok": True, "scope": scope, "id": att["id"], "name": att["name"],
+                                "freshdesk_content_type": att.get("content_type"), **res}
+                    except Exception as e:
+                        return {"ok": False, "scope": scope, "id": att.get("id"), "name": att.get("name"),
+                                "error": f"{type(e).__name__}: {e}"}
 
             results = await asyncio.gather(*[_job(a, s, p) for a, s, p in jobs])
             for r in results:
                 (saved if r.get("ok") else errors).append(r)
 
             return {"ticket_id": ticket_id, "dest_dir": str(target), "saved": saved, "errors": errors,
-                    "count_saved": len(saved), "count_errors": len(errors)}
+                    "count_saved": len(saved), "count_errors": len(errors),
+                    "skipped_over_limit": skipped, "conversations_truncated": truncated}
         except httpx.HTTPStatusError as e:
             return {"error": f"HTTP {e.response.status_code}: {e.response.text[:500]}"}
         except Exception as e:
@@ -1480,7 +1603,7 @@ async def extract_inline_images(
         try:
             tr = await _fd_get(client, f"/tickets/{ticket_id}")
             ticket = tr.json()
-            convs = await _fetch_all_conversations(client, ticket_id)
+            convs, truncated = await _fetch_all_conversations(client, ticket_id)
 
             all_attachments: List[Dict[str, Any]] = list(ticket.get("attachments", []) or [])
             for c in convs:
@@ -1519,7 +1642,7 @@ async def extract_inline_images(
                         if m:
                             mime, b64 = m.group(1), m.group(2)
                             ext = mimetypes.guess_extension(mime) or ".bin"
-                            target.mkdir(parents=True, exist_ok=True)
+                            target.mkdir(parents=True, exist_ok=True, mode=0o700)
                             path = target / f"t{ticket_id}_inline_data_{len(saved)}{ext}"
                             try:
                                 data = base64.b64decode(b64)
@@ -1531,13 +1654,24 @@ async def extract_inline_images(
                             except Exception as e:
                                 errors.append({"source": src_label, "error": f"data uri: {e}"})
 
+            skipped = max(0, len(jobs) - _MAX_DOWNLOAD_FILES)
+            jobs = jobs[:_MAX_DOWNLOAD_FILES]
+            semaphore = asyncio.Semaphore(_DOWNLOAD_CONCURRENCY)
+
             async def _job(src, ref, url, path):
-                try:
-                    res = await _download_one(client, url, path, size_limit)
-                    return {"source": src, "kind": "cid" if not ref.startswith("http") else "url",
-                            "ref": ref, **res}
-                except Exception as e:
-                    return {"source": src, "ref": ref, "error": f"{type(e).__name__}: {e}"}
+                # A cid: reference resolves to a Freshdesk attachment URL, which
+                # the helpdesk itself issued. Anything else is a raw <img src>
+                # written by whoever sent the mail, so it has to be vetted.
+                from_ticket_html = ref.startswith("http")
+                async with semaphore:
+                    try:
+                        res = await _download_one(
+                            client, url, path, size_limit, validate_public=from_ticket_html
+                        )
+                        return {"source": src, "kind": "url" if from_ticket_html else "cid",
+                                "ref": ref, **res}
+                    except Exception as e:
+                        return {"source": src, "ref": ref, "error": f"{type(e).__name__}: {e}"}
 
             results = await asyncio.gather(*[_job(s, r, u, p) for s, r, u, p in jobs])
             for r in results:
@@ -1545,7 +1679,8 @@ async def extract_inline_images(
 
             return {"ticket_id": ticket_id, "dest_dir": str(target),
                     "saved": saved, "errors": errors,
-                    "count_saved": len(saved), "count_errors": len(errors)}
+                    "count_saved": len(saved), "count_errors": len(errors),
+                    "skipped_over_limit": skipped, "conversations_truncated": truncated}
         except httpx.HTTPStatusError as e:
             return {"error": f"HTTP {e.response.status_code}: {e.response.text[:500]}"}
         except Exception as e:

@@ -162,7 +162,7 @@ The server offers several tools for Freshdesk operations:
 - `download_ticket_attachments`: Download all attachments (ticket-level + per-conversation) to disk
   - **Inputs**:
     - `ticket_id` (number, required)
-    - `dest_dir` (string, optional): defaults to `$FRESHDESK_DOWNLOAD_DIR` or `/tmp/fd`
+    - `dest_dir` (string, optional): defaults to `$FRESHDESK_DOWNLOAD_DIR`, or a per-user directory under the system temp dir
     - `size_limit_mb` (number, optional, default `50`): per-file cap; larger files reported as errors
 
 - `extract_inline_images`: Resolve `cid:` references against attachments and download remote `<img src>` URLs from description + every conversation body
@@ -170,6 +170,21 @@ The server offers several tools for Freshdesk operations:
     - `ticket_id` (number, required)
     - `dest_dir` (string, optional)
     - `size_limit_mb` (number, optional, default `25`)
+  - **Note**: `<img src>` URLs come from ticket content, so they are checked against
+    loopback / link-local / private ranges (including across redirects) before being
+    fetched. `cid:` references resolve to Freshdesk's own attachment URLs and are exempt.
+
+##### Limits
+
+Ticket content is written by whoever mails the helpdesk, so the bulk tools bound the
+work a single call can trigger:
+
+| Environment variable | Default | Effect |
+|---|---|---|
+| `FRESHDESK_MAX_CONVERSATION_PAGES` | `50` | Caps conversation paging; results carry `conversations_truncated` |
+| `FRESHDESK_DOWNLOAD_CONCURRENCY` | `5` | Simultaneous downloads |
+| `FRESHDESK_MAX_DOWNLOAD_FILES` | `200` | Files per call; overflow reported as `skipped_over_limit` |
+| `FRESHDESK_DOWNLOAD_DIR` | per-user temp dir, mode `0700` | Where downloads land |
 
 - `decode_ticket_status`: Resolve a status integer to its label (handles custom statuses)
   - **Inputs**:
