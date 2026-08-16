@@ -216,8 +216,26 @@ three pull requests still open against upstream:
   `{"conversations": [...], "pagination": {...}}` instead of a bare list.
 - [#47](https://github.com/effytech/freshdesk_mcp/pull/47) — bulk fetch tools:
   `get_ticket_full`, `download_ticket_attachments`, `extract_inline_images`,
-  `decode_ticket_status`. Downloads go to `$FRESHDESK_DOWNLOAD_DIR`
-  (default `/tmp/fd`).
+  `decode_ticket_status`, hardened in this fork (see below).
+
+### Hardening applied to the bulk fetch tools
+
+Ticket bodies are written by whoever emails the helpdesk, so this fork treats
+anything derived from them as untrusted input:
+
+- `extract_inline_images` refuses `<img src>` URLs that resolve to loopback,
+  link-local, private or otherwise non-public addresses — including across
+  redirects, which are followed one hop at a time and re-checked. Without this,
+  a customer could mail an `<img src="http://169.254.169.254/…">` and have the
+  server fetch it. Attachment URLs issued by Freshdesk itself are unaffected.
+- Conversation paging stops at `FRESHDESK_MAX_CONVERSATION_PAGES` (default 50)
+  and the result carries `conversations_truncated` so a caller can tell.
+- Downloads run at most `FRESHDESK_DOWNLOAD_CONCURRENCY` at a time (default 5),
+  capped at `FRESHDESK_MAX_DOWNLOAD_FILES` files (default 200), each still
+  bounded by the per-file size limit.
+- Downloads default to a per-user directory (`freshdesk-mcp-<uid>` under the
+  system temp dir) created mode `0700`, instead of a shared `/tmp/fd`. Override
+  with `FRESHDESK_DOWNLOAD_DIR`.
 
 That makes 78 tools instead of upstream's 59.
 

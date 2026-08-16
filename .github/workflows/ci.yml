@@ -25,5 +25,7 @@ jobs:
       - run: >-
           uv run pytest -q
           tests/test_mcp_v2.py
+          tests/test_security_hardening.py
+          tests/test_solution_functions.py
           tests/test_company_functions.py::TestParseHeaderFunction
       - run: uv build

@@ -19,7 +19,11 @@ jobs:
           python-version: "3.12"
 
       - run: uv sync --locked --dev
-      - run: uv run pytest -q tests/test_mcp_v2.py tests/test_solution_functions.py
+      - run: >-
+          uv run pytest -q
+          tests/test_mcp_v2.py
+          tests/test_security_hardening.py
+          tests/test_solution_functions.py
 
       # Fail before publishing rather than after, if the tag and the version in
       # pyproject.toml disagree. PyPI never lets a version be re-uploaded.
